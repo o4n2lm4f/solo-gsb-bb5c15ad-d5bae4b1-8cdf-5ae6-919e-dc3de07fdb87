@@ -8,6 +8,9 @@ export const ANN_FOCUS_EVENT = 'clause:annotation-focus';
 /** 正文规范命中标记点击 -> 侧栏规范用语面板聚焦（并滚动到命中行）的事件名 */
 export const TERM_FOCUS_EVENT = 'clause:term-focus';
 
+/** 正文条卡片「审签」按钮 -> 侧栏条款审签面板聚焦该条的事件名 */
+export const SIGNOFF_FOCUS_EVENT = 'clause:signoff-focus';
+
 export const StoreContext = createContext<{ store: AppStore; highlighter: Highlighter } | null>(
   null,
 );

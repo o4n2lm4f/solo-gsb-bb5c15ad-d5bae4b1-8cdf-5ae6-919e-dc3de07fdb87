@@ -274,7 +274,37 @@ export interface IssueBaseline {
   confirmed: Record<string, string>;
 }
 
-/** 持久化状态（同时用于本地文件与浏览器缓存） */
+/**
+ * 条款审签：针对某一“条”的签署记录。
+ * 记录该条稳定 ID、签署人、签署时间与签署时刻该条完整条文
+ * （条号、标题、正文、款、项）的内容指纹；按当前条文重算指纹以判定是否有效。
+ */
+export interface ArticleSignoff {
+  id: string;
+  /** 条节点稳定 ID（条被删除后记录保留，但不计入当前统计） */
+  articleId: string;
+  /** 审签人姓名 */
+  signer: string;
+  /** 签署时间（毫秒时间戳）；重新签署时刷新 */
+  signedAt: number;
+  /** 签署时刻该条完整条文（条号、标题、正文、款、项）的内容指纹 */
+  fingerprint: string;
+  /** 最近一次重新签署前的历史签署（保留签署人与时间，不参与有效性判定） */
+  history?: ArticleSignoffHistory[];
+}
+
+/** 重新签署时归档的上一版签署信息 */
+export interface ArticleSignoffHistory {
+  signer: string;
+  signedAt: number;
+  fingerprint: string;
+}
+
+/** 审签条目当前状态（按当前条文实时重算） */
+export type SignoffStatus = 'unsigned' | 'valid' | 'stale' | 'deleted';
+
+/**
+ * 持久化状态（同时用于本地文件与浏览器缓存） */
 export interface PersistedState {
   doc: ClauseDocument;
   /** 歧义引用确认：signature -> targetId */
@@ -287,6 +317,8 @@ export interface PersistedState {
   termRules?: TermRule[];
   /** 问题基线；旧数据缺少该字段时按空列表加载 */
   issueBaselines?: IssueBaseline[];
+  /** 条款审签记录；旧数据缺少该字段时按空列表加载 */
+  signoffs?: ArticleSignoff[];
 }
 
 export interface ExportBundle {
@@ -302,5 +334,7 @@ export interface ExportBundle {
   termRules?: TermRule[];
   /** 问题基线随 JSON 一并导出，导入时恢复（重新分析以重建问题身份）；旧文件缺少该字段时按空列表加载 */
   issueBaselines?: IssueBaseline[];
+  /** 条款审签记录随 JSON 一并导出，导入后按当前条文重算有效 / 待重签；旧文件缺少该字段时按空列表加载 */
+  signoffs?: ArticleSignoff[];
   exportedAt: string;
 }

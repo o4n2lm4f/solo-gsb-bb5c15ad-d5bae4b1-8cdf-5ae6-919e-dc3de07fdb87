@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useApp } from '../lib/context';
+import { useApp, SIGNOFF_FOCUS_EVENT } from '../lib/context';
 import { useHighlighter } from '../lib/highlighter';
 import type { ClauseNode, RefOccurrence } from '../../shared/model';
 import { NodeEditor } from './NodeEditor';
@@ -99,6 +99,9 @@ function ArticleView({
   const issues = store.getSnapshot().analysis.issues.filter(
     (i) => i.sourceNodeId === article.id || i.cycleNodeIds?.includes(article.id),
   );
+  const signoffStatus = store.getSnapshot().signoffView.entries.find(
+    (e) => e.articleId === article.id,
+  )?.status;
   const glows = hl.hoverTargetNodeIds.includes(article.id);
 
   // 问题跳转 / 关系图定位到“条”本身时滚动到该卡片
@@ -178,6 +181,21 @@ function ArticleView({
           <span className="article-title">【{article.title}】</span>
         )}
         <div className="head-actions">
+          <button
+            className={`signoff-entry-btn ${signoffStatus && signoffStatus !== 'unsigned' ? `is-${signoffStatus}` : ''}`}
+            title={
+              signoffStatus === 'valid'
+                ? '该条已审签且当前条文有效（点击查看）'
+                : signoffStatus === 'stale'
+                  ? '条文已变化，该条待重签（点击查看）'
+                  : '对该条录入审签人并签署'
+            }
+            onClick={() =>
+              window.dispatchEvent(new CustomEvent(SIGNOFF_FOCUS_EVENT, { detail: article.id }))
+            }
+          >
+            {signoffStatus === 'valid' ? '✓ 已签' : signoffStatus === 'stale' ? '⚠ 待重签' : '审签'}
+          </button>
           <button
             title="新增款"
             onClick={() => store.addParagraph(article.id)}

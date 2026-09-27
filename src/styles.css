@@ -334,9 +334,10 @@ button.small { padding: 1px 6px; font-size: 11px; }
 }
 
 /* ---------- 侧栏 ---------- */
-.side-tabs { display: flex; flex: 0 0 auto; }
+.side-tabs { display: flex; flex: 0 0 auto; flex-wrap: wrap; }
 .side-tabs button {
-  flex: 1;
+  flex: 1 1 auto;
+  min-width: 64px;
   border: none;
   border-bottom: 2px solid transparent;
   border-radius: 0;
@@ -1395,3 +1396,114 @@ button.small { padding: 1px 6px; font-size: 11px; }
 .rp-warning-raw { display: block; font-weight: 700; margin-top: 2px; }
 .rp-warning-reason { display: block; font-size: 11.5px; color: var(--text-dim); margin-top: 1px; }
 .rp-warning-extra { display: block; font-size: 11.5px; color: var(--text-dim); margin-top: 1px; }
+
+/* ---- 条款审签 ---- */
+.signoff-panel { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.signoff-summary {
+  padding: 9px 12px;
+  font-size: 12px;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+}
+.signoff-summary em { font-style: normal; font-weight: 700; }
+.signoff-summary .sg-valid { color: var(--ok); }
+.signoff-summary .sg-stale { color: var(--warn); }
+.signoff-summary .sg-unsigned { color: var(--text-dim); }
+.signoff-summary .sg-deleted { color: var(--danger); }
+
+.signoff-signer-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px 4px;
+}
+.signoff-signer-box label { font-size: 12px; color: var(--text-dim); white-space: nowrap; }
+.signoff-signer-input {
+  flex: 1;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text);
+  padding: 4px 8px;
+  font-size: 12.5px;
+  font-family: inherit;
+}
+.signoff-signer-input:focus { outline: none; border-color: var(--accent); }
+
+.signoff-list { flex: 1; min-height: 0; }
+.signoff-row { border-left: 3px solid var(--border); }
+.signoff-row.sg-valid { border-left-color: var(--ok); }
+.signoff-row.sg-stale { border-left-color: var(--warn); }
+.signoff-row.sg-unsigned { border-left-color: var(--border); }
+.signoff-row-active { outline: 1px solid var(--accent); outline-offset: -1px; }
+.signoff-jump-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.signoff-jump-btn:hover:not(:disabled) { color: var(--accent); }
+
+.sg-status-tag { font-size: 11.5px; font-weight: 700; color: var(--text-dim); white-space: nowrap; }
+.sg-status-tag.is-valid { color: var(--ok); }
+.sg-status-tag.is-stale { color: var(--warn); }
+.sg-status-tag.is-deleted { color: var(--danger); }
+.sg-status-tag.is-unsigned { color: var(--text-dim); }
+.issue-filters .sg-filter-stale { color: var(--warn); }
+.issue-filters .sg-filter-stale.active { color: var(--warn); border-color: var(--warn); }
+
+.signoff-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: center;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  margin: 3px 0;
+}
+.signoff-meta-empty { font-style: italic; }
+.signoff-signer-name { color: var(--text); font-weight: 600; }
+.signoff-fp {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
+.signoff-history { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+
+.signoff-deleted-box {
+  border-top: 1px dashed var(--border);
+  padding: 7px 12px;
+  max-height: 30%;
+  overflow: auto;
+}
+.signoff-deleted-title { font-size: 11.5px; color: var(--danger); margin-bottom: 4px; }
+.signoff-deleted-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 11px;
+  color: var(--text-dim);
+  padding: 2px 0;
+  flex-wrap: wrap;
+}
+.signoff-deleted-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 130px;
+}
+
+/* 条卡片标题栏上的审签入口 */
+.signoff-entry-btn.is-valid { border-color: var(--ok); color: var(--ok); }
+.signoff-entry-btn.is-stale { border-color: var(--warn); color: var(--warn); }
+.signoff-entry-btn.is-valid:hover:not(:disabled) { border-color: var(--ok); color: var(--ok); background: rgba(52, 211, 153, 0.12); }
+.signoff-entry-btn.is-stale:hover:not(:disabled) { border-color: var(--warn); color: var(--warn); background: rgba(251, 191, 36, 0.12); }

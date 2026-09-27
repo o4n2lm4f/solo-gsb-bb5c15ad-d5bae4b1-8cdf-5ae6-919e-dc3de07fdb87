@@ -38,7 +38,13 @@ import {
   readingPackWarningJump,
   renderReadingPackText,
 } from '../src/lib/readingpack';
-import { assert } from 'node:console';
+import {
+  articleFingerprint,
+  buildSignoffView,
+  canonicalArticle,
+  fnv1a64,
+  sanitizeSignoffs,
+} from '../src/lib/signoff';
 
 let pass = 0;
 let fail = 0;
@@ -1889,6 +1895,174 @@ check('闭区间为每个目标建边', combA.edges.filter((e) => e.refKey === r
   check('阅读包：清空不影响正文', JSON.stringify(tmpStore.getSnapshot().doc) === beforeTmp);
   const exported = tmpStore.exportJson();
   check('阅读包：不随 JSON 导出', !('readingPack' in exported));
+}
+
+// ---- 条款审签：条文指纹、签署 / 重签 / 撤销恢复、删除不计统计、持久化与导入导出 ----
+{
+  const sgText = `审签办法
+
+第一条【目的】
+为了规范审签活动，制定本办法。
+
+第二条【程序】
+程序如下：
+（一）起草；
+（二）审查。
+
+第三条【附则】
+参见第一条。`;
+  const mkSgDoc = () => parseDocument(sgText).doc;
+
+  // —— 指纹：相同条文稳定，条号 / 标题 / 正文 / 款 / 项任一变化即改变 ——
+  const d0 = mkSgDoc();
+  const fp1 = articleFingerprint(d0.root[0]);
+  check('审签：指纹为 16 位十六进制', /^[0-9a-f]{16}$/.test(fp1), fp1);
+  check('审签：相同条文指纹稳定', articleFingerprint(cloneTree(d0.root)[0]) === fp1);
+  check('审签：FNV 空串向量', fnv1a64('') === 'cbf29ce484222325', fnv1a64(''));
+  check('审签：规范化投影含条号/标题/正文/款/项', (() => {
+    const c = canonicalArticle(d0.root[1]) as Record<string, unknown>;
+    const p = c.p as { t: string; c: unknown[] }[];
+    return c.n === 2 && c.h === '程序' && Array.isArray(p) && p.length === 1 && p[0].t === '程序如下：';
+  })());
+  const canonItem = (canonicalArticle(d0.root[1]).p as { c: unknown[] }[])[0];
+  check('审签：款下含 2 项', canonItem.c.length === 2, String(canonItem.c.length));
+
+  const titleChanged = cloneTree(d0.root);
+  titleChanged[0].title = '目标';
+  check('审签：标题变化指纹改变', articleFingerprint(titleChanged[0]) !== fp1);
+  const headChanged = cloneTree(d0.root);
+  headChanged[0].text = `${headChanged[0].text}补充。`;
+  check('审签：条头正文变化指纹改变', articleFingerprint(headChanged[0]) !== fp1);
+  const paraChanged = cloneTree(d0.root);
+  paraChanged[1].children[0].text = `${paraChanged[1].children[0].text}。`;
+  check('审签：款正文变化该条指纹改变', articleFingerprint(paraChanged[1]) !== articleFingerprint(d0.root[1]));
+  const itemChanged = cloneTree(d0.root);
+  itemChanged[1].children[0].children[1].text = '（二）复核。';
+  check('审签：项正文变化该条指纹改变', articleFingerprint(itemChanged[1]) !== articleFingerprint(d0.root[1]));
+  const otherUnchanged = cloneTree(d0.root);
+  check('审签：编辑第二条不影响第一条指纹', articleFingerprint(otherUnchanged[0]) === fp1);
+
+  // —— 签署：有效 / 未签统计 ——
+  const sgStore = new AppStore({ doc: mkSgDoc(), confirmed: {}, annotations: [] });
+  const art1 = sgStore.getSnapshot().doc.root[0];
+  const art2 = sgStore.getSnapshot().doc.root[1];
+  const art3 = sgStore.getSnapshot().doc.root[2];
+  check('审签：初始全部未签', (() => {
+    const v = sgStore.getSignoffView();
+    return v.counts.total === 3 && v.counts.unsigned === 3 && v.counts.valid === 0 && v.counts.stale === 0;
+  })());
+  check('审签：空审签人被拒绝', sgStore.signArticle(art1.id, '  ').ok === false);
+  check('审签：不存在的条被拒绝', sgStore.signArticle('art_nope', '张三').ok === false);
+  check('审签：签署成功', sgStore.signArticle(art1.id, '张三').ok === true);
+  {
+    const v = sgStore.getSignoffView();
+    check('审签：签署后 1 有效 2 未签', v.counts.valid === 1 && v.counts.unsigned === 2, JSON.stringify(v.counts));
+    const e = v.entries[0];
+    check('审签：有效条目记录审签人与指纹', e.status === 'valid' && e.signoff?.signer === '张三' && e.signoff.fingerprint === fp1);
+    check('审签：签署不进入撤销历史', sgStore.getSnapshot().canUndo === false);
+  }
+
+  // —— 正文编辑 -> 待重签；撤销恢复原文 -> 恢复有效 ——
+  sgStore.updateNodeText(art1.id, `${art1.text}新增内容。`);
+  check('审签：正文编辑后待重签', sgStore.getSignoffView().entries[0].status === 'stale');
+  check('审签：统计 1 待重签 2 未签 0 有效', (() => {
+    const c = sgStore.getSignoffView().counts;
+    return c.stale === 1 && c.unsigned === 2 && c.valid === 0;
+  })());
+  sgStore.undo();
+  check('审签：撤销恢复原文后恢复有效', sgStore.getSignoffView().entries[0].status === 'valid');
+  sgStore.redo();
+  check('审签：重做后再次待重签', sgStore.getSignoffView().entries[0].status === 'stale');
+  sgStore.undo();
+
+  // —— 结构调整（拖拽换序 + 自动引用改写）-> 受影响条待重签，未变化条保持有效 ——
+  check('审签：第二条签署有效', sgStore.signArticle(art2.id, '李四').ok === true);
+  // 第三条引用第一条，结构操作前先签署：它正文含引用，第三条移到首位时其自身编号不变但其他条改写
+  check('审签：第三条签署有效', sgStore.signArticle(art3.id, '王五').ok === true);
+  check('审签：三条均有效', sgStore.getSignoffView().counts.valid === 3);
+  // 把第三条移到首位（3->1, 1->2, 2->3）：条号变化使三条全部指纹改变，且第一/二条正文被自动改写
+  sgStore.reorderSibling(art3.id, 0);
+  {
+    const v = sgStore.getSignoffView();
+    check('审签：结构调整后全部待重签（条号即条文的一部分）', v.counts.stale === 3 && v.counts.valid === 0, JSON.stringify(v.counts));
+    check('审签：稳定 ID 仍可定位到原条', v.entries[0].articleId === art3.id);
+  }
+  sgStore.undo();
+  check('审签：撤销结构调整后三条恢复有效', sgStore.getSignoffView().counts.valid === 3);
+
+  // —— 仅影响单条的编辑：其他条保持有效 ——
+  sgStore.updateNodeText(art2.children[0].id, `${art2.children[0].text}补充。`);
+  {
+    const v = sgStore.getSignoffView();
+    const byId = new Map(v.entries.map((e) => [e.articleId, e.status]));
+    check('审签：改款正文仅第二条待重签', byId.get(art2.id) === 'stale' && byId.get(art1.id) === 'valid' && byId.get(art3.id) === 'valid');
+  }
+  sgStore.undo();
+
+  // —— 删除条：记录保留但不计入当前统计；其后条因重编号显示待重签；撤销删除恢复 ——
+  sgStore.deleteNode(art2.id);
+  {
+    const v = sgStore.getSignoffView();
+    check('审签：删除后当前统计 2 条', v.counts.total === 2 && v.deleted.length === 1, JSON.stringify(v.counts));
+    check('审签：删除条记录进入已删除列表', v.deleted[0].articleId === art2.id && v.deleted[0].status === 'deleted' && v.deleted[0].signoff?.signer === '李四');
+    // 第三条重编号为第二条 -> 受结构调整影响待重签；第一条编号未变保持有效
+    const byId = new Map(v.entries.map((e) => [e.articleId, e.status]));
+    check('审签：删除后首条仍有效、其后条因重编号待重签', byId.get(art1.id) === 'valid' && byId.get(art3.id) === 'stale');
+  }
+  sgStore.undo();
+  {
+    const v = sgStore.getSignoffView();
+    check('审签：撤销删除后恢复且条文一致即有效', v.counts.total === 3 && v.deleted.length === 0 && v.counts.valid === 3);
+  }
+
+  // —— 重新签署：刷新指纹与时间，归档上一版签署 ——
+  sgStore.updateNodeText(art1.id, `${art1.text}修订。`);
+  check('审签：修订后待重签', sgStore.getSignoffView().entries.find((e) => e.articleId === art1.id)!.status === 'stale');
+  const beforeResign = sgStore.getSignoffView().entries.find((e) => e.articleId === art1.id)!.signoff!;
+  check('审签：重新签署成功', sgStore.signArticle(art1.id, '赵六').ok === true);
+  {
+    const e = sgStore.getSignoffView().entries.find((x) => x.articleId === art1.id)!;
+    check('审签：重签后恢复有效且审签人更新', e.status === 'valid' && e.signoff!.signer === '赵六');
+    check('审签：上一版签署归档', e.signoff!.history?.length === 1 && e.signoff!.history![0].signer === '张三');
+    check('审签：归档指纹为旧指纹', e.signoff!.history![0].fingerprint === beforeResign.fingerprint);
+  }
+
+  // —— 持久化 + JSON 导入导出：随包往返，旧数据按空记录加载 ——
+  const bundle = sgStore.exportJson();
+  check('审签：随 JSON 导出 3 条记录', Array.isArray(bundle.signoffs) && bundle.signoffs!.length === 3, String(bundle.signoffs?.length));
+  const reimported = new AppStore({ doc: mkSgDoc(), confirmed: {}, annotations: [] });
+  reimported.importJson(bundle);
+  {
+    const v = reimported.getSignoffView();
+    check('审签：导入后按当前条文重算（同文档 -> 2 有效，第一条为重签后的新指纹仍有效）', v.counts.valid === 3 && v.counts.stale === 0, JSON.stringify(v.counts));
+  }
+  // 旧文件缺少 signoffs：按空记录加载
+  const legacy = new AppStore({ doc: mkSgDoc(), confirmed: {}, annotations: [] });
+  legacy.importJson({ ...bundle, signoffs: undefined });
+  check('审签：旧数据缺少 signoffs 按空记录加载', legacy.getSignoffView().counts.unsigned === 3);
+
+  // —— 规整：非法记录被剔除，同一条多条记录取最新 ——
+  check('审签：非数组规整为空', sanitizeSignoffs(null).length === 0);
+  check('审签：缺字段记录被剔除', sanitizeSignoffs([
+    { id: 'a', articleId: art1.id, signer: '  ', fingerprint: 'x', signedAt: 1 },
+    { id: 'b', articleId: art1.id, signer: '张三', fingerprint: '', signedAt: 1 },
+    { id: 'c', articleId: '', signer: '张三', fingerprint: 'x', signedAt: 1 },
+  ]).length === 0);
+  check('审签：合法记录保留并 trim 审签人', sanitizeSignoffs([
+    { id: 'a', articleId: art1.id, signer: ' 张三 ', fingerprint: 'x', signedAt: 1 },
+  ])[0].signer === '张三');
+  {
+    const dupDoc = mkSgDoc();
+    const dupArtId = dupDoc.root[0].id;
+    const s1 = { id: 'a', articleId: dupArtId, signer: '张三', fingerprint: 'x', signedAt: 1 };
+    const s2 = { id: 'b', articleId: dupArtId, signer: '李四', fingerprint: 'y', signedAt: 2 };
+    const v = buildSignoffView(dupDoc, [s1, s2]);
+    check('审签：同条多条记录汇总取最新签署', v.entries[0].signoff?.id === 'b');
+  }
+
+  // —— 粘贴替换 / 载入示例：审签清空 ——
+  reimported.importPastedText(sgText);
+  check('审签：粘贴新文档后清空', reimported.getSignoffView().counts.unsigned === 3 && reimported.getSignoffView().deleted.length === 0);
 }
 
 console.log(`\n通过 ${pass} 项，失败 ${fail} 项`);

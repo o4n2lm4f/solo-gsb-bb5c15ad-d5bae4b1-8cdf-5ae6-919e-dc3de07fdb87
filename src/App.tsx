@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { AppStore } from './lib/store';
 import type { Highlighter } from './lib/highlighter';
-import { StoreContext, ANN_FOCUS_EVENT, TERM_FOCUS_EVENT } from './lib/context';
+import { StoreContext, ANN_FOCUS_EVENT, TERM_FOCUS_EVENT, SIGNOFF_FOCUS_EVENT } from './lib/context';
 import { Toolbar } from './components/Toolbar';
 import { DocumentTree } from './components/DocumentTree';
 import { IssuePanel } from './components/IssuePanel';
@@ -11,11 +11,12 @@ import { RelationView } from './components/RelationView';
 import { CompareView } from './components/CompareView';
 import { SandboxPanel } from './components/SandboxPanel';
 import { ReadingPackPanel } from './components/ReadingPackPanel';
+import { SignoffPanel } from './components/SignoffPanel';
 import { ImportDialog } from './components/ImportDialog';
 import { ToastHost } from './components/Toast';
 
 type ViewMode = 'edit' | 'compare';
-type SideTab = 'issues' | 'annotations' | 'terms' | 'graph' | 'sandbox' | 'readingpack';
+type SideTab = 'issues' | 'annotations' | 'terms' | 'graph' | 'sandbox' | 'readingpack' | 'signoffs';
 
 export default function App({
   store,
@@ -29,6 +30,7 @@ export default function App({
   const [importOpen, setImportOpen] = useState(false);
   const [annFocus, setAnnFocus] = useState<{ id: string; nonce: number } | null>(null);
   const [termFocus, setTermFocus] = useState<{ key: string; nonce: number } | null>(null);
+  const [signoffFocus, setSignoffFocus] = useState<{ id: string; nonce: number } | null>(null);
   const [, force] = useState(0);
   useEffect(() => store.subscribe(() => force((n) => n + 1)), [store]);
 
@@ -78,8 +80,22 @@ export default function App({
     return () => window.removeEventListener(TERM_FOCUS_EVENT, onTermFocus);
   }, []);
 
+  // 点击正文条卡片「审签」：切换到条款审签标签并请求侧栏滚动定位
+  useEffect(() => {
+    const onSignoffFocus = (e: Event) => {
+      const id = (e as CustomEvent<string>).detail;
+      if (id) {
+        setRightTab('signoffs');
+        setSignoffFocus((prev) => ({ id, nonce: (prev?.nonce ?? 0) + 1 }));
+      }
+    };
+    window.addEventListener(SIGNOFF_FOCUS_EVENT, onSignoffFocus);
+    return () => window.removeEventListener(SIGNOFF_FOCUS_EVENT, onSignoffFocus);
+  }, []);
+
   const reviewCount = store.getSnapshot().annotations.filter((a) => a.status === 'review').length;
   const termHitCount = store.getSnapshot().termHits.length;
+  const signoffStaleCount = store.getSnapshot().signoffView.counts.stale;
 
   return (
     <StoreContext.Provider value={{ store, highlighter }}>
@@ -150,6 +166,14 @@ export default function App({
                 >
                   引用阅读包
                 </button>
+                <button
+                  role="tab"
+                  aria-selected={rightTab === 'signoffs'}
+                  className={rightTab === 'signoffs' ? 'active' : ''}
+                  onClick={() => setRightTab('signoffs')}
+                >
+                  条款审签{signoffStaleCount > 0 ? `（${signoffStaleCount} 待重签）` : ''}
+                </button>
               </div>
               {rightTab === 'issues' ? (
                 <IssuePanel />
@@ -167,6 +191,11 @@ export default function App({
                 <RelationView />
               ) : rightTab === 'sandbox' ? (
                 <SandboxPanel />
+              ) : rightTab === 'signoffs' ? (
+                <SignoffPanel
+                  focusSignal={signoffFocus}
+                  onConsumeFocus={() => setSignoffFocus(null)}
+                />
               ) : (
                 <ReadingPackPanel />
               )}

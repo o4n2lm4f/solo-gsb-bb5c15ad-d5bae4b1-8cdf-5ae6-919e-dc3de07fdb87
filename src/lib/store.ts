@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import type {
   Annotation,
+  ArticleSignoff,
   ClauseDocument,
   ClauseNode,
   DocSnapshot,
@@ -33,6 +34,13 @@ import { buildReadingPack, isReadingPackStale, type ReadingPack } from './readin
 import { localStore, serverStore } from './storage';
 import { createSnapshot, sanitizeSnapshots } from './snapshot';
 import { createIssueBaseline, sanitizeIssueBaselines } from './issueBaseline';
+import {
+  articleFingerprint,
+  buildSignoffView,
+  sanitizeSignoffs,
+  signArticle,
+  type SignoffView,
+} from './signoff';
 import {
   createAnnotation as makeAnnotation,
   relocateAnnotations,
@@ -75,6 +83,8 @@ interface Snapshot {
   readingPack: ReadingPack | null;
   /** 阅读包生成后正文或歧义确认记录已变化：失效，须重新生成，禁止复制旧结果 */
   readingPackStale: boolean;
+  /** 条款审签记录对当前正文的实时汇总（有效 / 待重签 / 未签 / 已删除） */
+  signoffView: SignoffView;
   canUndo: boolean;
   canRedo: boolean;
 }
@@ -87,6 +97,8 @@ export class AppStore {
   private docState: DocState;
   private snapshots: DocSnapshot[] = [];
   private issueBaselines: IssueBaseline[] = [];
+  /** 条款审签记录（独立于正文撤销历史；有效 / 待重签按当前条文实时重算） */
+  private signoffs: ArticleSignoff[] = [];
   private analysis: Analysis;
   /** 当前规范用语命中（随 docState 实时重算，不进入撤销历史） */
   private termHits: TermHit[] = [];
@@ -109,6 +121,8 @@ export class AppStore {
   constructor(initial: PersistedState) {
     this.snapshots = sanitizeSnapshots(initial.snapshots);
     this.issueBaselines = sanitizeIssueBaselines(initial.issueBaselines);
+    // 审签记录随本地存储 / JSON 加载；旧数据缺少 signoffs 时按空列表加载
+    this.signoffs = sanitizeSignoffs(initial.signoffs);
     const annotations = sanitizeAnnotations(initial.annotations);
     const termRules = sanitizeTermRules(initial.termRules);
     const doc = initial.doc;
@@ -143,16 +157,18 @@ export class AppStore {
     readingPackStale: this.readingPack
       ? isReadingPackStale(this.readingPack, this.docRevision, this.docState.confirmed)
       : false,
+    signoffView: buildSignoffView(this.docState.doc, this.signoffs),
     canUndo: this.past.length > 0,
     canRedo: this.future.length > 0,
   });
 
-  /** 当前完整持久化状态（正文 + 确认 + 批注 + 快照 + 问题基线） */
+  /** 当前完整持久化状态（正文 + 确认 + 批注 + 快照 + 问题基线 + 审签） */
   private currentPersisted(): PersistedState {
     return {
       ...this.docState,
       snapshots: this.snapshots,
       issueBaselines: this.issueBaselines,
+      signoffs: this.signoffs,
     };
   }
 
@@ -382,9 +398,10 @@ export class AppStore {
 
   importPastedText(raw: string): void {
     const { doc } = parseDocument(raw, this.docState.doc.title);
-    // 粘贴替换正文是全新文档，旧快照、问题基线与批注不再有对齐意义；规范用语规则是用户词表，予以保留
+    // 粘贴替换正文是全新文档，旧快照、问题基线、审签与批注不再有对齐意义；规范用语规则是用户词表，予以保留
     this.snapshots = [];
     this.issueBaselines = [];
+    this.signoffs = [];
     // 会话内临时产物（沙盒预演、引用阅读包）基于旧正文，新文档下一律清空
     this.sandbox = null;
     this.readingPack = null;
@@ -408,6 +425,8 @@ export class AppStore {
     const annotations = sanitizeAnnotations(bundle.annotations);
     // 规范用语规则随 JSON 导入；旧文件缺少 termRules 时按空规则加载
     const termRules = sanitizeTermRules(bundle.termRules);
+    // 审签记录随 JSON 导入；旧文件缺少 signoffs 时按空列表加载，有效 / 待重签按导入正文实时重算
+    this.signoffs = sanitizeSignoffs(bundle.signoffs);
     renumberAll(doc.root);
     this.commit({ doc: touch(doc), confirmed, annotations, termRules });
   }
@@ -422,6 +441,7 @@ export class AppStore {
       issueBaselines: this.issueBaselines,
       annotations: this.docState.annotations,
       termRules: this.docState.termRules,
+      signoffs: this.signoffs,
       exportedAt: new Date().toISOString(),
     };
   }
@@ -429,6 +449,8 @@ export class AppStore {
   replaceWithSample(doc: ClauseDocument): void {
     this.snapshots = [];
     this.issueBaselines = [];
+    // 内置示例为全新文档，旧审签记录不再适用
+    this.signoffs = [];
     // 内置示例自带示例规则（见 sampleTermRules），同时保留用户已维护的词表
     this.commit({
       doc,
@@ -486,6 +508,36 @@ export class AppStore {
     this.issueBaselines = this.issueBaselines.filter((b) => b.id !== baselineId);
     this.scheduleSave();
     this.emit();
+  }
+
+  // ---------- 条款审签（独立于撤销历史；有效 / 待重签按当前条文指纹实时重算） ----------
+
+  /**
+   * 对选定条录入审签人并签署：记录条稳定 ID、签署时间与当时完整条文
+   * （条号、标题、正文、款、项）的内容指纹。同一条再次签署时归档上一版签署信息。
+   * 签署不改正文、不进入撤销历史；正文被撤销恢复原文时记录指纹重新匹配，自动恢复有效。
+   */
+  signArticle(articleId: string, signer: string): { ok: boolean; error?: string } {
+    const name = signer.trim();
+    if (!name) return { ok: false, error: '请填写审签人' };
+    const article = findNode(this.docState.doc.root, articleId)?.node;
+    if (!article || article.kind !== 'article') {
+      return { ok: false, error: '条款不存在或已删除' };
+    }
+    const existing = this.signoffs.find((s) => s.articleId === articleId);
+    const record = signArticle(existing, articleId, name, articleFingerprint(article));
+    this.signoffs = [
+      ...this.signoffs.filter((s) => s.articleId !== articleId),
+      record,
+    ];
+    this.scheduleSave();
+    this.emit();
+    return { ok: true };
+  }
+
+  /** 当前审签汇总（供面板与徽标使用；已删除条记录单列、不计入统计） */
+  getSignoffView(): SignoffView {
+    return buildSignoffView(this.docState.doc, this.signoffs);
   }
 
   // ---------- 修订沙盒（会话内预演：在文档克隆上复用结构改写与分析，不改动正文与撤销历史） ----------
