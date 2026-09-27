@@ -11,11 +11,20 @@ import { RelationView } from './components/RelationView';
 import { CompareView } from './components/CompareView';
 import { SandboxPanel } from './components/SandboxPanel';
 import { ReadingPackPanel } from './components/ReadingPackPanel';
+import { SignoffPanel } from './components/SignoffPanel';
 import { ImportDialog } from './components/ImportDialog';
 import { ToastHost } from './components/Toast';
+import { signoffStatusMap } from './lib/signoff';
 
 type ViewMode = 'edit' | 'compare';
-type SideTab = 'issues' | 'annotations' | 'terms' | 'graph' | 'sandbox' | 'readingpack';
+type SideTab =
+  | 'issues'
+  | 'annotations'
+  | 'terms'
+  | 'graph'
+  | 'sandbox'
+  | 'readingpack'
+  | 'signoffs';
 
 export default function App({
   store,
@@ -80,6 +89,13 @@ export default function App({
 
   const reviewCount = store.getSnapshot().annotations.filter((a) => a.status === 'review').length;
   const termHitCount = store.getSnapshot().termHits.length;
+  const signoffStaleCount = (() => {
+    const { doc, signoffs } = store.getSnapshot();
+    const map = signoffStatusMap(doc.root, signoffs);
+    let n = 0;
+    for (const st of map.values()) if (st === 'stale') n++;
+    return n;
+  })();
 
   return (
     <StoreContext.Provider value={{ store, highlighter }}>
@@ -150,6 +166,14 @@ export default function App({
                 >
                   引用阅读包
                 </button>
+                <button
+                  role="tab"
+                  aria-selected={rightTab === 'signoffs'}
+                  className={rightTab === 'signoffs' ? 'active' : ''}
+                  onClick={() => setRightTab('signoffs')}
+                >
+                  条款审签{signoffStaleCount > 0 ? `（${signoffStaleCount} 待重签）` : ''}
+                </button>
               </div>
               {rightTab === 'issues' ? (
                 <IssuePanel />
@@ -167,6 +191,8 @@ export default function App({
                 <RelationView />
               ) : rightTab === 'sandbox' ? (
                 <SandboxPanel />
+              ) : rightTab === 'signoffs' ? (
+                <SignoffPanel />
               ) : (
                 <ReadingPackPanel />
               )}

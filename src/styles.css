@@ -213,6 +213,28 @@ button.small { padding: 1px 6px; font-size: 11px; }
 .article-number:hover { text-shadow: 0 0 10px rgba(56, 189, 248, 0.6); }
 .suffix { color: var(--cycle); font-style: normal; font-weight: 600; }
 .article-title { color: var(--warn); font-weight: 600; }
+
+/* 条审签状态徽标 */
+.article-signoff-badge {
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+.article-signoff-badge.is-valid {
+  color: var(--ok);
+  border-color: rgba(52, 211, 153, 0.5);
+  background: rgba(52, 211, 153, 0.08);
+}
+.article-signoff-badge.is-stale {
+  color: var(--warn);
+  border-color: rgba(251, 191, 36, 0.55);
+  background: rgba(251, 191, 36, 0.1);
+}
+
 .num-edit { width: 56px; background: var(--panel-2); color: var(--text); border: 1px solid var(--accent); border-radius: 4px; padding: 2px 6px; }
 
 .head-actions { margin-left: auto; display: flex; gap: 5px; visibility: hidden; }
@@ -1395,3 +1417,91 @@ button.small { padding: 1px 6px; font-size: 11px; }
 .rp-warning-raw { display: block; font-weight: 700; margin-top: 2px; }
 .rp-warning-reason { display: block; font-size: 11.5px; color: var(--text-dim); margin-top: 1px; }
 .rp-warning-extra { display: block; font-size: 11.5px; color: var(--text-dim); margin-top: 1px; }
+
+/* ---------- 条款审签 ---------- */
+.signoff-panel { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.signoff-builder {
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border);
+  background: rgba(56,189,248,0.04);
+  padding: 8px 10px 10px;
+}
+.signoff-builder-head { display: flex; align-items: baseline; gap: 8px; }
+.signoff-builder-note { font-size: 11px; color: var(--text-dim); }
+.signoff-form { display: flex; gap: 6px; margin-top: 8px; }
+.signoff-name-input {
+  flex: 1;
+  min-width: 90px;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 3px 8px;
+  font-size: 12px;
+}
+.signoff-name-input:focus { border-color: var(--accent); outline: none; }
+.signoff-selected-hint { margin-top: 7px; font-size: 11.5px; line-height: 1.6; }
+.signoff-selected-hint.is-valid { color: var(--ok); }
+.signoff-selected-hint.is-stale { color: var(--warn); }
+.signoff-selected-hint.is-unsigned { color: var(--text-dim); }
+
+.signoff-filters button.signoff-filter-valid.active { border-color: var(--ok); color: var(--ok); }
+.signoff-filters button.signoff-filter-stale.active { border-color: var(--warn); color: var(--warn); }
+.signoff-filters button.signoff-filter-unsigned.active { border-color: var(--accent); color: var(--accent); }
+
+.signoff-list { padding-top: 8px; }
+.signoff-row { border-left-width: 3px; }
+.signoff-row.is-valid { border-left-color: var(--ok); }
+.signoff-row.is-stale { border-left-color: var(--warn); }
+.signoff-row.is-unsigned { border-left-color: var(--border); }
+.signoff-row.signoff-row-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px rgba(56,189,248,0.35);
+}
+.signoff-jump {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: none;
+  border: none;
+  padding: 0;
+  text-align: left;
+  min-width: 0;
+}
+.signoff-jump:hover { border-color: transparent; }
+.signoff-status-tag {
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+.signoff-status-tag.is-valid { color: var(--ok); border-color: rgba(52,211,153,0.5); }
+.signoff-status-tag.is-stale { color: var(--warn); border-color: rgba(251,191,36,0.55); }
+.signoff-status-tag.is-unsigned { color: var(--text-dim); }
+.signoff-article-label { font-size: 12.5px; font-weight: 700; color: var(--accent); white-space: nowrap; }
+.signoff-article-title { font-size: 11.5px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.signoff-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+.signoff-signer { color: var(--text); font-weight: 600; }
+.signoff-fp { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 10.5px; }
+.signoff-meta-empty { font-style: italic; }
+.signoff-stale-line {
+  margin-top: 5px;
+  font-size: 11.5px;
+  color: var(--warn);
+  background: rgba(251,191,36,0.08);
+  border: 1px solid rgba(251,191,36,0.35);
+  border-radius: 5px;
+  padding: 4px 8px;
+}
+.signoff-row-actions { display: flex; gap: 10px; margin-top: 5px; }
+

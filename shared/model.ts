@@ -274,6 +274,27 @@ export interface IssueBaseline {
   confirmed: Record<string, string>;
 }
 
+/**
+ * 条款审签记录：对某一条的一次签署。
+ * 记录该条稳定 ID、签署时间、审签人，以及签署时该条完整条文
+ * （条号、标题、正文、款、项）的内容指纹；当前条文指纹与之不同即「待重签」。
+ * 同一条重新签署时以新记录覆盖旧记录；条被删除后记录保留（撤销删除可恢复有效），
+ * 但不列入当前统计。
+ */
+export interface ArticleSignoff {
+  id: string;
+  /** 被签署条的稳定节点 ID */
+  articleId: string;
+  /** 审签人姓名 */
+  signer: string;
+  /** 签署时间（ms 时间戳） */
+  signedAt: number;
+  /** 签署时该条完整条文的内容指纹（含算法版本前缀，如 v1-…） */
+  fingerprint: string;
+  /** 指纹算法版本；算法升级后旧记录一律判为待重签 */
+  fpVersion: string;
+}
+
 /** 持久化状态（同时用于本地文件与浏览器缓存） */
 export interface PersistedState {
   doc: ClauseDocument;
@@ -287,6 +308,8 @@ export interface PersistedState {
   termRules?: TermRule[];
   /** 问题基线；旧数据缺少该字段时按空列表加载 */
   issueBaselines?: IssueBaseline[];
+  /** 条款审签记录；旧数据缺少该字段时按空列表加载 */
+  signoffs?: ArticleSignoff[];
 }
 
 export interface ExportBundle {
@@ -302,5 +325,7 @@ export interface ExportBundle {
   termRules?: TermRule[];
   /** 问题基线随 JSON 一并导出，导入时恢复（重新分析以重建问题身份）；旧文件缺少该字段时按空列表加载 */
   issueBaselines?: IssueBaseline[];
+  /** 条款审签记录随 JSON 一并导出；旧文件缺少该字段时按空列表加载 */
+  signoffs?: ArticleSignoff[];
   exportedAt: string;
 }

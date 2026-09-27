@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import type {
   Annotation,
+  ArticleSignoff,
   ClauseDocument,
   ClauseNode,
   DocSnapshot,
@@ -48,13 +49,15 @@ import {
 import type { TermHit, TermRule } from '../../shared/model';
 import { sampleTermRules } from './sample';
 import { uid } from './uid';
+import { createSignoff, sanitizeSignoffs } from './signoff';
 
-/** 撤销/重做历史承载正文、确认记录、批注与规范用语规则；快照独立于历史，不参与撤销 */
+/** 撤销/重做历史承载正文、确认记录、批注、规范用语规则与审签记录；快照独立于历史，不参与撤销 */
 interface DocState {
   doc: ClauseDocument;
   confirmed: Record<string, string>;
   annotations: Annotation[];
   termRules: TermRule[];
+  signoffs: ArticleSignoff[];
 }
 
 interface Snapshot {
@@ -62,6 +65,7 @@ interface Snapshot {
   confirmed: Record<string, string>;
   annotations: Annotation[];
   termRules: TermRule[];
+  signoffs: ArticleSignoff[];
   snapshots: DocSnapshot[];
   issueBaselines: IssueBaseline[];
   analysis: Analysis;
@@ -111,10 +115,17 @@ export class AppStore {
     this.issueBaselines = sanitizeIssueBaselines(initial.issueBaselines);
     const annotations = sanitizeAnnotations(initial.annotations);
     const termRules = sanitizeTermRules(initial.termRules);
+    const signoffs = sanitizeSignoffs(initial.signoffs);
     const doc = initial.doc;
     // 加载时按当前正文校正一次位置（导入的 JSON / 旧数据可能已与正文不同步）
     const relocated = relocateAnnotations(annotations, doc).annotations;
-    this.docState = { doc, confirmed: initial.confirmed, annotations: relocated, termRules };
+    this.docState = {
+      doc,
+      confirmed: initial.confirmed,
+      annotations: relocated,
+      termRules,
+      signoffs,
+    };
     this.analysis = analyze(doc, { confirmed: initial.confirmed });
     this.termHits = scanTerms(doc, termRules);
   }
@@ -133,6 +144,7 @@ export class AppStore {
     confirmed: this.docState.confirmed,
     annotations: this.docState.annotations,
     termRules: this.docState.termRules,
+    signoffs: this.docState.signoffs,
     snapshots: this.snapshots,
     issueBaselines: this.issueBaselines,
     analysis: this.analysis,
@@ -177,7 +189,13 @@ export class AppStore {
     for (const [sig, target] of Object.entries(next.confirmed)) {
       if (valid.has(sig) && analysis.nodes[target]) confirmed[sig] = target;
     }
-    next = { confirmed, doc: touch(next.doc), annotations, termRules: next.termRules };
+    next = {
+      confirmed,
+      doc: touch(next.doc),
+      annotations,
+      termRules: next.termRules,
+      signoffs: next.signoffs,
+    };
     // 规范用语命中随正文 / 规则实时重扫
     const termHits = scanTerms(next.doc, next.termRules);
 
@@ -388,7 +406,13 @@ export class AppStore {
     // 会话内临时产物（沙盒预演、引用阅读包）基于旧正文，新文档下一律清空
     this.sandbox = null;
     this.readingPack = null;
-    this.commit({ doc, confirmed: {}, annotations: [], termRules: this.docState.termRules });
+    this.commit({
+      doc,
+      confirmed: {},
+      annotations: [],
+      termRules: this.docState.termRules,
+      signoffs: [],
+    });
   }
 
   importJson(bundle: ExportBundle | PersistedState): void {
@@ -408,8 +432,10 @@ export class AppStore {
     const annotations = sanitizeAnnotations(bundle.annotations);
     // 规范用语规则随 JSON 导入；旧文件缺少 termRules 时按空规则加载
     const termRules = sanitizeTermRules(bundle.termRules);
+    // 条款审签记录随 JSON 导入；状态（有效 / 待重签）由提交后按当前条文重算指纹决定
+    const signoffs = sanitizeSignoffs(bundle.signoffs);
     renumberAll(doc.root);
-    this.commit({ doc: touch(doc), confirmed, annotations, termRules });
+    this.commit({ doc: touch(doc), confirmed, annotations, termRules, signoffs });
   }
 
   exportJson(): ExportBundle {
@@ -422,6 +448,7 @@ export class AppStore {
       issueBaselines: this.issueBaselines,
       annotations: this.docState.annotations,
       termRules: this.docState.termRules,
+      signoffs: this.docState.signoffs,
       exportedAt: new Date().toISOString(),
     };
   }
@@ -435,6 +462,7 @@ export class AppStore {
       confirmed: {},
       annotations: [],
       termRules: [...sampleTermRules(), ...this.docState.termRules],
+      signoffs: [],
     });
   }
 
@@ -689,6 +717,33 @@ export class AppStore {
     });
   }
 
+  // ---------- 条款审签 ----------
+
+  /**
+   * 对指定条录入审签人并签署：记录稳定条 ID、签署时间与当前完整条文指纹。
+   * 同一条已有记录时以新记录覆盖（即“重新签署”）。作为一次状态变更提交，
+   * 支持撤销 / 重做（撤销签署后该条回到未签 / 待重签状态；撤销恢复原文时指纹重新有效）。
+   */
+  signArticle(articleId: string, signer: string): boolean {
+    const trimmed = signer.trim();
+    if (!trimmed) return false;
+    const found = findNode(this.docState.doc.root, articleId);
+    if (!found || found.node.kind !== 'article') return false;
+    const record = createSignoff(found.node, trimmed);
+    const others = this.docState.signoffs.filter((s) => s.articleId !== articleId);
+    this.commit({ ...this.docState, signoffs: [...others, record] });
+    return true;
+  }
+
+  /** 删除一条审签记录（回到未签状态），支持撤销 / 重做 */
+  deleteSignoff(articleId: string): void {
+    if (!this.docState.signoffs.some((s) => s.articleId === articleId)) return;
+    this.commit({
+      ...this.docState,
+      signoffs: this.docState.signoffs.filter((s) => s.articleId !== articleId),
+    });
+  }
+
   // ---------- 派生查询 ----------
 
   /** 当前正文版本号（仅正文内容变化时递增；供会话内临时产物做失效判定） */
@@ -837,5 +892,6 @@ export async function bootstrapStore(): Promise<AppStore> {
     confirmed: {},
     annotations: [],
     termRules: sampleTermRules(),
+    signoffs: [],
   });
 }

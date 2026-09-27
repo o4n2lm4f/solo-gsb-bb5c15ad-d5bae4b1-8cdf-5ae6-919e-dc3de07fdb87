@@ -5,15 +5,19 @@ import type { ClauseNode, RefOccurrence } from '../../shared/model';
 import { NodeEditor } from './NodeEditor';
 import { formatOrdinal } from '../lib/numeral';
 import { countNodes } from '../lib/parser';
+import { signoffStatusMap, type SignoffStatus } from '../lib/signoff';
 
 export function DocumentTree() {
   const { store, highlighter } = useApp();
   const [, force] = useState(0);
   useEffect(() => store.subscribe(() => force((n) => n + 1)), [store]);
   const hl = useHighlighter(highlighter);
-  const { doc, analysis } = store.getSnapshot();
+  const { doc, analysis, signoffs } = store.getSnapshot();
   const counts = countNodes(doc);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+
+  // 当前条文下各条审签状态（有效 / 待重签），按当前指纹实时重算
+  const signoffStatuses = signoffStatusMap(doc.root, signoffs);
 
   const toggle = (id: string) =>
     setCollapsed((c) => ({ ...c, [id]: !c[id] }));
@@ -65,6 +69,7 @@ export function DocumentTree() {
             collapsed={Boolean(collapsed[article.id])}
             onToggle={() => toggle(article.id)}
             occurrences={analysis.byNode[article.id] ?? []}
+            signoffStatus={signoffStatuses.get(article.id)}
           />
         ))}
         {doc.root.length === 0 && (
@@ -83,12 +88,14 @@ function ArticleView({
   collapsed,
   onToggle,
   occurrences,
+  signoffStatus,
 }: {
   article: ClauseNode;
   index: number;
   collapsed: boolean;
   onToggle: () => void;
   occurrences: RefOccurrence[];
+  signoffStatus?: SignoffStatus;
 }) {
   const { store, highlighter } = useApp();
   const hl = useHighlighter(highlighter);
@@ -176,6 +183,14 @@ function ArticleView({
         )}
         {article.title !== undefined && (
           <span className="article-title">【{article.title}】</span>
+        )}
+        {signoffStatus && (
+          <span
+            className={`article-signoff-badge is-${signoffStatus}`}
+            title={signoffStatus === 'valid' ? '该条审签有效（条文与签署时一致）' : '条文自审签后已变化，需到右侧「条款审签」重新签署'}
+          >
+            {signoffStatus === 'valid' ? '✓ 已审签' : '⚠ 待重签'}
+          </span>
         )}
         <div className="head-actions">
           <button

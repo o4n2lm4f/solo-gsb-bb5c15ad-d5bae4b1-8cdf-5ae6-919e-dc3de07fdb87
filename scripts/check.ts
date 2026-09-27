@@ -38,8 +38,15 @@ import {
   readingPackWarningJump,
   renderReadingPackText,
 } from '../src/lib/readingpack';
+import {
+  articleFingerprint,
+  createSignoff,
+  sanitizeSignoffs,
+  signoffStatusMap,
+  SIGNFP_VERSION,
+  serializeArticle,
+} from '../src/lib/signoff';
 import { assert } from 'node:console';
-
 let pass = 0;
 let fail = 0;
 function check(name: string, cond: boolean, extra = '') {
@@ -1889,6 +1896,250 @@ check('闭区间为每个目标建边', combA.edges.filter((e) => e.refKey === r
   check('阅读包：清空不影响正文', JSON.stringify(tmpStore.getSnapshot().doc) === beforeTmp);
   const exported = tmpStore.exportJson();
   check('阅读包：不随 JSON 导出', !('readingPack' in exported));
+}
+
+// ---- 条款审签：内容指纹（条号、标题、正文、款、项） ----
+{
+  const d = parseDocument(`审签法
+
+第一条【目的】
+为了测试而制定本法。
+具体规定如下：
+（一）第一项内容；
+（二）第二项内容。
+
+第二条【程序】
+按照本条规定办理。`).doc;
+  renumberAll(d.root);
+  const art1 = d.root[0];
+  const art2 = d.root[1];
+  const fp1 = articleFingerprint(art1);
+
+  check('指纹带版本前缀', fp1.startsWith(`${SIGNFP_VERSION}-`), fp1);
+  check('同一条文指纹稳定', articleFingerprint(JSON.parse(JSON.stringify(art1))) === fp1);
+  check('不同条指纹不同', fp1 !== articleFingerprint(art2));
+  check('序列化包含条号与标题', serializeArticle(art1).includes('ARTICLE 1') && serializeArticle(art1).includes('TITLE 目的'));
+  check('序列化包含款正文', serializeArticle(art1).includes('P 1 TEXT 为了测试而制定本法。') && serializeArticle(art1).includes('P 2 TEXT 具体规定如下：'));
+  check('序列化包含项', serializeArticle(art1).includes('P 2 I 1 TEXT 第一项内容；') && serializeArticle(art1).includes('P 2 I 2 TEXT 第二项内容。'));
+
+  // 款正文编辑
+  const editedPara = JSON.parse(JSON.stringify(art1)) as typeof art1;
+  editedPara.children[0].text = '第一款内容已调整。';
+  check('款正文编辑改变指纹', articleFingerprint(editedPara) !== fp1);
+
+  // 项正文编辑
+  const editedItem = JSON.parse(JSON.stringify(art1)) as typeof art1;
+  editedItem.children[1].children[1].text = '第二项被修改。';
+  check('项正文编辑改变指纹', articleFingerprint(editedItem) !== fp1);
+
+  // 标题编辑
+  const editedTitle = JSON.parse(JSON.stringify(art1)) as typeof art1;
+  editedTitle.title = '立法目的';
+  check('条标题编辑改变指纹', articleFingerprint(editedTitle) !== fp1);
+
+  // 增删项改变（款项结构）
+  const addedItem = JSON.parse(JSON.stringify(art1)) as typeof art1;
+  addedItem.children[1].children.push({ id: 'x', kind: 'item', ordinal: 3, text: '新增项', children: [] });
+  check('新增项改变指纹', articleFingerprint(addedItem) !== fp1);
+
+  // 条头正文（无款的条）编辑
+  const headOnly = parseDocument(`头条法
+
+第一条
+条头正文直接写在这里。`).doc;
+  renumberAll(headOnly.root);
+  const headFp = articleFingerprint(headOnly.root[0]);
+  const headEdited = JSON.parse(JSON.stringify(headOnly.root[0])) as typeof headOnly.root[0];
+  headEdited.text = '条头正文被修改。';
+  check('条头正文编辑改变指纹', articleFingerprint(headEdited) !== headFp);
+  check('序列化包含条头正文', serializeArticle(headOnly.root[0]).includes('TEXT 条头正文直接写在这里。'));
+
+  // 条号（结构位置）变化
+  const renumbered = JSON.parse(JSON.stringify(art1)) as typeof art1;
+  renumbered.ordinal = 2;
+  check('条号变化改变指纹（结构调整可检测）', articleFingerprint(renumbered) !== fp1);
+
+  // 条序号后缀
+  const suffixed = JSON.parse(JSON.stringify(art1)) as typeof art1;
+  suffixed.suffix = '一';
+  check('条序号后缀变化改变指纹', articleFingerprint(suffixed) !== fp1);
+}
+
+// ---- 条款审签：sanitize 规整与状态映射 ----
+{
+  const d = parseDocument(`审签法二
+
+第一条
+第一条正文。
+
+第二条
+第二条正文。
+
+第三条
+第三条正文。`).doc;
+  renumberAll(d.root);
+  const [a1, a2, a3] = d.root;
+  const rec1 = createSignoff(a1, '张三', 1000);
+  const rec2 = createSignoff(a2, '李四', 2000);
+  const rec2Stale = { ...rec2, signedAt: 3000, fingerprint: 'v1-deadbeef' };
+
+  const sanitized = sanitizeSignoffs([
+    rec1,
+    rec2,
+    rec2Stale, // 同条更晚的记录覆盖更早的
+    null,
+    {},
+    { id: 'bad', articleId: a1.id, signer: '  ', signedAt: 1, fingerprint: 'v1-x' }, // 空审签人剔除
+    { id: 'bad2', articleId: '', signer: '王五', signedAt: 1, fingerprint: 'v1-x' },
+    { id: 'bad3', articleId: a3.id, signer: '赵六', signedAt: 'x', fingerprint: 'v1-x' },
+    { id: 'bad4', articleId: a3.id, signer: '钱七', signedAt: 5, fingerprint: '' },
+  ]);
+  check('规整：剔除非法记录', sanitized.length === 2, JSON.stringify(sanitized.map(s => s.signer)));
+  check('规整：同条保留最新记录', sanitized.find((s) => s.articleId === a2.id)?.signedAt === 3000);
+  check('规整：旧数据缺字段 → 空列表', sanitizeSignoffs(undefined).length === 0 && sanitizeSignoffs(null).length === 0 && sanitizeSignoffs('x').length === 0);
+  check('规整：审签人 trim', sanitizeSignoffs([{ articleId: a3.id, signer: '  王五  ', signedAt: 1, fingerprint: 'v1-x' }])[0].signer === '王五');
+
+  const map = signoffStatusMap(d.root, sanitized);
+  check('状态：未变条文为有效', map.get(a1.id) === 'valid');
+  check('状态：指纹不一致为待重签', map.get(a2.id) === 'stale');
+  check('状态：无记录条不进入映射', !map.has(a3.id));
+
+  // 已删除条：记录保留但不进入映射、不计入统计
+  const mapAfterDelete = signoffStatusMap([a1, a3], sanitized);
+  check('状态：删除条不计入统计', !mapAfterDelete.has(a2.id) && mapAfterDelete.get(a1.id) === 'valid');
+
+  // 指纹算法版本升级 → 待重签
+  const oldVersion = [{ ...rec1, fpVersion: 'v0' }];
+  check('状态：旧算法版本判为待重签', signoffStatusMap(d.root, oldVersion).get(a1.id) === 'stale');
+}
+
+// ---- 条款审签：AppStore 签署 / 重算 / 撤销 / 持久化 / 导入导出 ----
+{
+  const d = parseDocument(`审签法三
+
+第一条【标题一】
+本条规定基本制度。
+
+第二条【标题二】
+一般规定。
+
+第三条【标题三】
+特殊规定。
+
+第四条【标题四】
+适用第一条的规定。`).doc;
+  renumberAll(d.root);
+  const a1 = d.root[0];
+  const a2 = d.root[1];
+  const a3 = d.root[2];
+  const a4 = d.root[3];
+  const store = new AppStore({ doc: d, confirmed: {}, annotations: [], signoffs: [] });
+  check('初始无审签记录', store.getSnapshot().signoffs.length === 0);
+
+  // 空审签人 / 不存在条拒绝
+  check('空审签人拒绝签署', store.signArticle(a1.id, '   ') === false);
+  check('不存在条拒绝签署', store.signArticle('art_nope', '张三') === false);
+  check('拒绝后无历史', store.getSnapshot().canUndo === false);
+
+  // 签署第一条
+  check('签署成功', store.signArticle(a1.id, ' 张三 ') === true);
+  let snap = store.getSnapshot();
+  check('记录含稳定条 ID、审签人与时间', snap.signoffs.length === 1 && snap.signoffs[0].articleId === a1.id && snap.signoffs[0].signer === '张三' && snap.signoffs[0].signedAt > 0);
+  check('签署后状态为有效', signoffStatusMap(snap.doc.root, snap.signoffs).get(a1.id) === 'valid');
+  check('签署进入撤销历史', store.getSnapshot().canUndo === true);
+
+  // 正文编辑未触及第一条 → 仍有效
+  store.updateNodeText(a3.children[0].id, '附则内容已补充。');
+  snap = store.getSnapshot();
+  check('其他条正文编辑：本签署保持有效', signoffStatusMap(snap.doc.root, snap.signoffs).get(a1.id) === 'valid');
+
+  // 编辑第一条正文 → 待重签
+  store.updateNodeText(a1.children[0].id, '本条规定基本制度，已修订。');
+  snap = store.getSnapshot();
+  check('正文编辑：受影响条待重签', signoffStatusMap(snap.doc.root, snap.signoffs).get(a1.id) === 'stale');
+
+  // 撤销恢复原文 → 恢复有效
+  store.undo(); // 撤销第一条正文编辑
+  snap = store.getSnapshot();
+  check('撤销恢复原文：恢复有效', signoffStatusMap(snap.doc.root, snap.signoffs).get(a1.id) === 'valid', JSON.stringify(signoffStatusMap(snap.doc.root, snap.signoffs).get(a1.id)));
+  store.redo();
+  check('重做后再次待重签', signoffStatusMap(store.getSnapshot().doc.root, store.getSnapshot().signoffs).get(a1.id) === 'stale');
+  // 回到已修改状态后重新签署
+  check('重新签署成功', store.signArticle(a1.id, '张三') === true);
+  snap = store.getSnapshot();
+  check('重新签署后恢复有效', signoffStatusMap(snap.doc.root, snap.signoffs).get(a1.id) === 'valid');
+  check('同条重新签署只保留一条记录', snap.signoffs.filter((s) => s.articleId === a1.id).length === 1);
+
+  // 结构调整触发自动引用改写：签署全部条后交换第一条与第二条（相邻换位）：
+  // 两条条号互换 → 均待重签；第四条中“第一条”随自动改写指向新编号（原第一条现处第 2 位）→ 待重签；
+  // 第三条位置与内容均不变 → 保持有效。
+  store.signArticle(a2.id, '李四');
+  store.signArticle(a3.id, '王五');
+  store.signArticle(a4.id, '赵六');
+  store.reorderSibling(a1.id, 1);
+  snap = store.getSnapshot();
+  check('结构调整：换位的条均待重签（原第一条）', signoffStatusMap(snap.doc.root, snap.signoffs).get(a1.id) === 'stale');
+  check('结构调整：换位的条均待重签（原第二条）', signoffStatusMap(snap.doc.root, snap.signoffs).get(a2.id) === 'stale');
+  check('自动引用改写：引用方条待重签', signoffStatusMap(snap.doc.root, snap.signoffs).get(a4.id) === 'stale');
+  check('未变化的条保持有效', signoffStatusMap(snap.doc.root, snap.signoffs).get(a3.id) === 'valid');
+  // 撤销结构调整：编号恢复、引用回改 → 各条恢复有效
+  store.undo();
+  snap = store.getSnapshot();
+  check('撤销结构调整：换位条恢复有效', signoffStatusMap(snap.doc.root, snap.signoffs).get(a1.id) === 'valid' && signoffStatusMap(snap.doc.root, snap.signoffs).get(a2.id) === 'valid');
+  check('撤销结构调整：引用方恢复有效', signoffStatusMap(snap.doc.root, snap.signoffs).get(a4.id) === 'valid');
+
+  // 末尾新增条不改变既有条编号：签署仍有效
+  const newId = store.addArticle();
+  void newId;
+  check('末尾新增条：既有签署仍有效', signoffStatusMap(store.getSnapshot().doc.root, store.getSnapshot().signoffs).get(a1.id) === 'valid');
+
+  // 删除已签署条：记录保留（撤销可恢复）但不计入当前统计
+  store.deleteNode(a2.id);
+  snap = store.getSnapshot();
+  check('删除条：审签记录保留', snap.signoffs.some((s) => s.articleId === a2.id));
+  check('删除条：不计入当前状态映射', !signoffStatusMap(snap.doc.root, snap.signoffs).has(a2.id));
+  store.undo();
+  snap = store.getSnapshot();
+  check('撤销删除：条文恢复后记录重新参与统计', signoffStatusMap(snap.doc.root, snap.signoffs).has(a2.id));
+
+  // 撤销签署本身 → 回到未签
+  while (store.getSnapshot().canUndo) store.undo();
+  check('撤销到最初：无审签记录', store.getSnapshot().signoffs.length === 0);
+
+  // 删除记录
+  store.signArticle(a1.id, '王五');
+  check('删除审签记录', (store.deleteSignoff(a1.id), store.getSnapshot().signoffs.length === 0));
+  check('删除不存在记录为 no-op', (store.deleteSignoff(a1.id), store.getSnapshot().signoffs.length === 0));
+  store.undo();
+  check('删除记录可撤销', store.getSnapshot().signoffs.length === 1);
+
+  // 持久化与导出
+  const exported = store.exportJson();
+  check('导出 JSON 含 signoffs', Array.isArray(exported.signoffs) && exported.signoffs!.length === 1 && exported.signoffs![0].signer === '王五');
+
+  // JSON 导入：记录恢复，状态按导入文档重算（记录指纹与文档一致 → 有效）
+  const importStore = new AppStore({ doc: parseDocument('占位\n\n第一条\n占位。').doc, confirmed: {}, annotations: [] });
+  importStore.importJson(exported);
+  let impSnap = importStore.getSnapshot();
+  check('JSON 导入恢复审签记录', impSnap.signoffs.length === 1);
+  const importedA1 = impSnap.doc.root.find((x) => x.id === a1.id);
+  check('JSON 导入：指纹与文档一致时有效', Boolean(importedA1) && signoffStatusMap(impSnap.doc.root, impSnap.signoffs).get(a1.id) === 'valid');
+
+  // 旧文件缺 signoffs 按空记录加载
+  const legacy = new AppStore({ doc: d, confirmed: {}, annotations: [] });
+  check('旧数据缺 signoffs 按空记录加载', legacy.getSnapshot().signoffs.length === 0);
+
+  // 导入的记录对不上导入文档条文（此处手工篡改指纹由“条文不同”模拟）→ 待重签
+  const tampered = JSON.parse(JSON.stringify(exported));
+  tampered.document.root[0].children[0].text = '导入后正文又被改过。';
+  const importStore2 = new AppStore({ doc: parseDocument('占位\n\n第一条\n占位。').doc, confirmed: {}, annotations: [] });
+  importStore2.importJson(tampered);
+  impSnap = importStore2.getSnapshot();
+  check('JSON 导入：条文与签署时不一致判为待重签', signoffStatusMap(impSnap.doc.root, impSnap.signoffs).get(a1.id) === 'stale');
+
+  // 粘贴替换为新文档：审签记录清空（全新文档无对齐意义）
+  store.importPastedText('全新文档\n\n第一条\n全新内容。');
+  check('粘贴导入清空审签记录', store.getSnapshot().signoffs.length === 0);
 }
 
 console.log(`\n通过 ${pass} 项，失败 ${fail} 项`);
